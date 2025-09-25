@@ -1,0 +1,10 @@
+*.pyc
+.DS_Store
+.vscode
+node_modules
+third_party/package.json
+out
+
+# --cut-here--
+dist
+# --cut-here--

@@ -1,0 +1,97 @@
+name: Test GPU
+
+# Controls when the action will run. Triggers the workflow on push
+on:
+  push:
+    branches:
+      - '**' # Triggers on pushes to any branch
+    tags:
+      - 'v*' # Triggers on pushes of tags like v1.0, v20.15.10
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: 
+        - {
+            name: "Windows Latest MSVC",
+            os: windows-latest,
+          }
+        - {
+            name: "Ubuntu_22_GCC",
+            os: ubuntu-22.04,
+          }
+        - {
+            name: "macOS Latest Clang",
+            os: macos-latest,
+          }
+
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Print env
+        run: |
+          echo github.event.action: ${{ github.event.action }}
+          echo github.event_name: ${{ github.event_name }}
+          echo github.ref: ${{ github.ref }}
+
+      - name: Install dependencies on ubuntu
+        if: startsWith(matrix.config.name, 'Ubuntu')
+        run: |
+          sudo apt-get update
+          # vulkan-tools for vulkaninfo, mesa-vulkan-drivers contains lavapipe (llvmpipe)
+          sudo apt-get install -y vulkan-tools mesa-vulkan-drivers
+
+          find /usr/share/vulkan
+    
+          # The JSON manifest for lavapipe is typically named 'lvp_icd.json' 
+          # and is installed to the system ICD directory by the apt package.
+          ICD_PATH=$(find /usr/share/vulkan/icd.d/ -name "lvp_icd*.json" | head -n 1)
+
+          if [ -z "$ICD_PATH" ]; then
+            echo "Error: Could not find lvp_icd.json. Lavapipe installation failed."
+            exit 1
+          fi
+
+          echo "Found Lavapipe ICD at: $ICD_PATH"
+          
+          # Set the environment variable for all subsequent steps in this job
+          echo "VK_ICD_FILENAMES=$ICD_PATH" >> $GITHUB_ENV
+
+          # Set VK_LAYER_PATH to find validation layers (useful for debugging)
+          echo "VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
+
+
+      - name: Check Vulkan setup with vulkaninfo
+        if: startsWith(matrix.config.name, 'Ubuntu')
+        # Lavapipe relies on the VK_ICD_FILENAMES environment variable to be set
+        # by the installation action.
+        run: |
+          echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
+          # The variable should be non-empty and point to a JSON file.
+          ls -l $VK_ICD_FILENAMES # Check if the file exists
+          # Use vulkaninfo to list available devices and check for Lavapipe/LLVMpipe
+          vulkaninfo | grep -A 2 "deviceName"
+
+      - name: Test
+        shell: bash
+        env:
+          WEBGPU_USE_CI_AVAILABLE_RENDERER: "1"
+        run: |
+          npm ci
+          echo "${{ github.event_name }}"
+          npm run show-adapters
+          npm run test
